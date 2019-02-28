@@ -183,6 +183,7 @@ void DeviceSideKickEmu::HandlePacket_Response_SectorData(const UDPMessageInfo& m
                        data->m_sector_1[(3*j) + 2]);
             }
             printf("\n");
+            fflush(stdout);
             #endif
 
 //                printf("Setting color: #%02x%02x%02x\n", m_ambient_color[0], m_ambient_color[1], m_ambient_color[2]);
