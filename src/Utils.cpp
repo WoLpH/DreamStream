@@ -26,7 +26,7 @@
 
 #ifdef ARDUINO
 #include <Arduino.h>
-#elif defined(__linux__)
+#elif defined(NIX)
 #include <unistd.h>
 #elif defined(_WIN32)
 #include <windows.h>
@@ -99,7 +99,7 @@ void Utils::Sleep(int sleepMs)
 {
 #ifdef ARDUINO
     delay(sleepMs);
-#elif defined(__linux__)
+#elif defined(NIX)
     usleep(sleepMs * 1000);
 #elif defined(_WIN32)
     ::Sleep(sleepMs);

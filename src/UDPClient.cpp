@@ -101,7 +101,7 @@ bool UDPClientImpl::Select(int32_t timeoutSec, int32_t timeoutUSec)
 }
 
 
-#elif (defined(__linux__) || defined(_WIN32))
+#elif (defined(NIX) || defined(_WIN32))
 UDPClientImpl::UDPClientImpl()
     : m_socket(-1)
     , m_is_broadcast(false)
@@ -157,7 +157,7 @@ bool UDPClientImpl::Init(const char* hostname, uint16_t port)
         freeaddrinfo(res);
         return false;
     }
-#elif defined(__linux__)
+#elif defined(NIX)
     curflags = fcntl(m_socket, F_GETFL);
 
     if (curflags < 0)

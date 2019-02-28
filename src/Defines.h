@@ -22,6 +22,11 @@
 
 // #define ARDUINO
 
+#if defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
+#define NIX
+#endif
+
+
 /////// Logging
 // If you wish to disable logging (e.g. memory restraints on smaller devices)
 // simply comment out this define, or define to 0
