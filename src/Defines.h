@@ -32,7 +32,7 @@
 // simply comment out this define, or define to 0
 // You can also limit the buffer size, and log messages will simply cut off if they reach the limit
 // Do note we also allocate 64 extra bytes for printing the severity and newline (see Logger::Log)
-#define LOG_BUFF_SIZE			0
+#define LOG_BUFF_SIZE			128
 
 /////// DreamScreen specific
 #define DS_PORT					8888
@@ -44,7 +44,7 @@
 
 // When defined, the functionality to manage other DreamScreen devices is enabled
 // This means that the program will not only act as a device itself, but can also control others.
-//#define ENABLE_CLIENT_DEVICES	
+//#define ENABLE_CLIENT_DEVICES
 
 #define SECTOR_SUBSCRIPTION_TIMEOUT_MS 7000
 

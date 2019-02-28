@@ -49,7 +49,7 @@ DeviceSideKickEmu::DeviceSideKickEmu(DeviceManager* manager)
 
     m_group_number = 0x1;
 
-    m_name = "DreamStream";
+    m_name = "DreamStream-mac";
 
     #ifdef USING_FASTLED
     FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
@@ -79,12 +79,15 @@ void DeviceSideKickEmu::Update()
         }
     }
 
-    #ifdef USING_FASTLED
+//    printf("Setting color: #%02x%02x%02x\n", m_ambient_color[0], m_ambient_color[1], m_ambient_color[2]);
     if (m_mode == DeviceMode::AMBIENT)
     {
+        #ifdef USING_FASTLED
         leds[0] = CRGB(m_ambient_color[0], m_ambient_color[1], m_ambient_color[2]);
+        #endif
     }
 
+    #ifdef USING_FASTLED
     FastLED.show();
     #endif
 }
@@ -168,6 +171,21 @@ void DeviceSideKickEmu::HandlePacket_Response_SectorData(const UDPMessageInfo& m
     {
         if (const PacketSectorData* data = PacketUtils::GetPayloadAs<PacketSectorData>(pkt))
         {
+            #ifdef ENABLE_LOGGING
+            printf("colors: ");
+            for(int j=0; j<12; j++){
+                printf("\033[48;2;%d;%d;%dm#%02x%02x%02x\033[0m ",
+                       data->m_sector_1[(3*j) + 0],
+                       data->m_sector_1[(3*j) + 1],
+                       data->m_sector_1[(3*j) + 2],
+                       data->m_sector_1[(3*j) + 0],
+                       data->m_sector_1[(3*j) + 1],
+                       data->m_sector_1[(3*j) + 2]);
+            }
+            printf("\n");
+            #endif
+
+//                printf("Setting color: #%02x%02x%02x\n", m_ambient_color[0], m_ambient_color[1], m_ambient_color[2]);
             #ifdef USING_FASTLED
             leds[0] = CRGB(data->m_sector_1[0], data->m_sector_1[1], data->m_sector_1[2]);
             #endif
