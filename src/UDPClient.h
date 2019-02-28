@@ -32,7 +32,7 @@
 
 #define IPV4_ADDRSTRLEN 32
 
-#elif (defined(__linux__) || defined(_WIN32))
+#elif (defined(__unix__) || defined(_WIN32))
 //#include "clsocket/ActiveSocket.h"
 //#include "clsocket/PassiveSocket.h"
 
@@ -95,7 +95,7 @@ private:
 
 };
 
-#elif (defined(__linux__) || defined(_WIN32))
+#elif (defined(__unix__) || defined(_WIN32))
 struct UDPClientImpl : public UDPClient
 {
     UDPClientImpl();

@@ -30,6 +30,7 @@
 
 #define FASTLED_ALLOW_INTERRUPTS 0
 
+#ifdef USING_FASTLED
 #include "FastLED.h"
 
 #define NUM_LEDS 1
@@ -38,6 +39,7 @@
 #define COLOR_ORDER GRB
 
 CRGB leds[5];
+#endif
 
 DeviceSideKickEmu::DeviceSideKickEmu(DeviceManager* manager)
     : DeviceSideKick(manager, "127.0.0.1")
@@ -49,8 +51,10 @@ DeviceSideKickEmu::DeviceSideKickEmu(DeviceManager* manager)
 
     m_name = "DreamStream";
 
+    #ifdef USING_FASTLED
     FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
     FastLED.setBrightness(100);
+    #endif
 }
 
 DeviceSideKickEmu::~DeviceSideKickEmu()
@@ -75,17 +79,21 @@ void DeviceSideKickEmu::Update()
         }
     }
 
+    #ifdef USING_FASTLED
     if (m_mode == DeviceMode::AMBIENT)
     {
         leds[0] = CRGB(m_ambient_color[0], m_ambient_color[1], m_ambient_color[2]);
     }
 
     FastLED.show();
+    #endif
 }
 
 void DeviceSideKickEmu::HandleChangeBrightness()
 {
+    #ifdef USING_FASTLED
     FastLED.setBrightness(m_brightness);
+    #endif
 }
 
 void DeviceSideKickEmu::HandlePacket(HandleState& hs, const UDPMessageInfo& msg, const PacketInfo& pkt)
@@ -160,7 +168,9 @@ void DeviceSideKickEmu::HandlePacket_Response_SectorData(const UDPMessageInfo& m
     {
         if (const PacketSectorData* data = PacketUtils::GetPayloadAs<PacketSectorData>(pkt))
         {
+            #ifdef USING_FASTLED
             leds[0] = CRGB(data->m_sector_1[0], data->m_sector_1[1], data->m_sector_1[2]);
+            #endif
         }
     }
 }

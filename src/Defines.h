@@ -20,7 +20,7 @@
 * THE SOFTWARE.                                                                 *
 *********************************************************************************/
 
-#define ARDUINO
+// #define ARDUINO
 
 /////// Logging
 // If you wish to disable logging (e.g. memory restraints on smaller devices)

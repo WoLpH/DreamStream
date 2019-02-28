@@ -31,7 +31,7 @@
 #elif defined(_WIN32)
 #include <Winsock2.h>
 #include <time.h>
-#elif defined(__linux__)
+#elif defined(__unix__)
 #include <stdio.h>
 #include <sys/time.h>
 #endif
@@ -59,7 +59,7 @@ private:
     {
         return millis();
     }
-#elif defined(__linux__)
+#elif defined(__unix__)
     static uint64_t GetTotalMSec()
     {
         timeval time;
