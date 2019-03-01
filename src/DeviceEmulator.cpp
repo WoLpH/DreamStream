@@ -27,6 +27,7 @@
 #include "DeviceType.h"
 #include "PacketHelpers.h"
 #include "Enums.h"
+#include <time.h>
 
 #define FASTLED_ALLOW_INTERRUPTS 0
 
@@ -165,6 +166,13 @@ void DeviceSideKickEmu::HandlePacket_Read_SubscribeToSectorData(const UDPMessage
     m_sector_subscription_timeout.Reset();
 }
 
+double millis(){
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+
+    return (t.tv_sec * 1000) + (t.tv_nsec / 1.0e6);
+}
+
 void DeviceSideKickEmu::HandlePacket_Response_SectorData(const UDPMessageInfo& msg, const PacketInfo& pkt)
 {
     if (PKT_IS(PKT_RESPONSE, pkt.m_hdr->m_flags))
@@ -172,7 +180,17 @@ void DeviceSideKickEmu::HandlePacket_Response_SectorData(const UDPMessageInfo& m
         if (const PacketSectorData* data = PacketUtils::GetPayloadAs<PacketSectorData>(pkt))
         {
             #ifdef ENABLE_LOGGING
-            printf("colors: ");
+            static double boot = millis();
+            static double start = millis();
+            static double end = millis();
+            start = end;
+            end = millis();
+            double duration = end - start;
+            // if duration is below 50ms, green, else red
+            int color = duration < 100 ? 32 : 31;
+
+            printf("\033[%dmcolors: %6.0f %4.0f\033[0m ", color, end - boot, duration);
+
             for(int j=0; j<12; j++){
                 printf("\033[48;2;%d;%d;%dm#%02x%02x%02x\033[0m ",
                        data->m_sector_1[(3*j) + 0],
