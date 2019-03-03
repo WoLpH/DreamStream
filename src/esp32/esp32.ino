@@ -33,11 +33,13 @@
 
 #ifdef USING_FASTLED
 #define FASTLED_LED_TYPE            WS2812B
-#define FASTLED_LED_COLOR_ORDER     GRB
-#define FASTLED_PIN_ID              5
-#define FASTLED_NUM_LEDS            12
-#define FASTLED_SMOOTHING           60
+#define FASTLED_LED_COLOR_ORDER     RGB
+#define FASTLED_PIN_ID              0
+#define FASTLED_NUM_LEDS            100
+#define FASTLED_SMOOTHING           200
 #endif // USING_FASTLED
+
+#define ENABLE_GRADIENT
 
 #if (defined(FASTLED_SMOOTHING) && FASTLED_SMOOTHING > 0)
 #define FASTLED_ENABLE_SMOOTHING
@@ -69,6 +71,8 @@
 #define FASTLED_ALLOW_INTERRUPTS    0
 #endif// USING_FASTLED
 
+// update interval in milliseconds
+#define UPDATE_INTERVAL             1
 
 ///////////////////////////////////////////////////////////////////////////////
 /// INCLUDES
@@ -76,6 +80,8 @@
 
 #include <cstdint>
 #include <Arduino.h>
+#include <Preferences.h>
+#include "esp_system.h"
 
 // https://stackoverflow.com/questions/41093090/esp8266-error-macro-min-passed-3-arguments-but-takes-just-2
 #undef min
@@ -84,41 +90,59 @@
 // Module
 #include "StaticString.h"
 #include "PacketHelpers.h"
+#include "../../../../../.platformio/packages/toolchain-xtensa32/xtensa-esp32-elf/include/c++/5.2.0/cstdint"
 
 // Wifi
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <ESPmDNS.h>
+#include <ArduinoOTA.h>
 
 #ifdef USING_FASTLED
 #include <FastLED.h>
 #endif // USING_FASTLED
+// #include "BackgroundTask.h"
 
 ///////////////////////////////////////////////////////////////////////////////
 /// OBJECTS
 ///////////////////////////////////////////////////////////////////////////////
 
 WiFiUDP g_udp;
+Preferences preferences;
+TaskHandle_t TaskA;
+
+void update(void * parameter);
 
 uint8_t g_read_buffer[PKT_BUFFER_SIZE];
 uint8_t g_write_buffer[PKT_BUFFER_SIZE];
 bool g_show_leds = false;
+bool updating = false;
+hw_timer_t *timer = NULL;
 
 #ifdef USING_FASTLED
+
 CRGB g_fastled_leds[FASTLED_NUM_LEDS];
 
 #ifdef FASTLED_ENABLE_SMOOTHING
 CRGB g_fastled_targetleds[FASTLED_NUM_LEDS];
-CRGB* fastledGetLeds() { return g_fastled_targetleds; }
+CHSV sectors[12];
 #else
-CRGB* fastledGetLeds() { return g_fastled_leds; }
+CRGB sectors[12];
 #endif // FASTLED_ENABLE_SMOOTHING
+
+CRGB* fastledGetLeds() {
+  #ifdef FASTLED_ENABLE_SMOOTHING
+  return g_fastled_targetleds;
+  #else
+  return g_fastled_leds;
+  #endif // FASTLED_ENABLE_SMOOTHING
+}
 
 #endif // USING_FASTLED
 
 // Code taken from DreamScreen V2 WiFi UDP Protocol Rev 4
 // http://dreamscreen.boards.net/thread/293/dreamscreen-wifi-udp-protocol
-const uint8_t uartComm_crc8_table[] PROGMEM = 
+const uint8_t uartComm_crc8_table[] PROGMEM =
 {
     0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15, 0x38, 0x3F, 0x36, 0x31, 0x24, 0x23,
     0x2A, 0x2D, 0x70, 0x77, 0x7E, 0x79, 0x6C, 0x6B, 0x62, 0x65, 0x48, 0x4F, 0x46, 0x41,
@@ -278,13 +302,51 @@ inline void handleWriteMode() FORCEINLINE;
 inline void sendPacket(const IPAddress& ip, uint8_t flag, COMMANDS::Type type, int32_t pktPayloadLen) FORCEINLINE;
 inline uint8_t calculateCrc8(const uint8_t* data, int32_t dataSize) FORCEINLINE;
 
-
+void Task1(void * parameter);
+void update(void * parameter);
 ///////////////////////////////////////////////////////////////////////////////
 /// MAIN
 ///////////////////////////////////////////////////////////////////////////////
 
+void setName(const uint8_t *pld);
+
+void setGroupName(const uint8_t *pld);
+
+void setMode(const uint8_t *pld);
+
+void Task1(void * parameter){
+  for(;;){
+    update();
+    delayMicroseconds(100);
+  }
+}
+
 void setup()
 {
+   xTaskCreatePinnedToCore(
+     Task1,                  /* pvTaskCode */
+     "Workload1",            /* pcName */
+     1000,                   /* usStackDepth */
+     NULL,                   /* pvParameters */
+     1,                      /* uxPriority */
+     &TaskA,                 /* pxCreatedTask */
+     0);                     /* xCoreID */
+
+    preferences.begin("dreamscreen", false);
+    g_state.m_device_type = preferences.getUChar("m_device_type", DEVICE_TYPE::SideKick);
+    g_state.m_brightness             = preferences.getUChar("m_brightness", 32);
+    g_state.m_ambient_mode_type      = preferences.getUChar("m_ambient_mode_type", AMBIENT_MODE::RGB);
+    g_state.m_ambient_show_type      = preferences.getUChar("m_ambient_show_type", AMBIENT_SCENE::RandomColor);
+    g_state.m_fade_rate              = preferences.getUChar("m_fade_rate", 4);
+    g_state.m_group_number           = preferences.getUChar("m_group_number", 1);
+    g_state.m_mode                   = preferences.getUChar("m_mode", DEVICE_MODE::Video);
+    preferences.getBytes("m_esp_firmware", g_state.m_esp_firmware, 2);
+    preferences.getBytes("m_ambient_color", g_state.m_ambient_color, 3);
+    preferences.getBytes("m_saturation", g_state.m_saturation, 3);
+    preferences.getBytes("m_sector_assignment", g_state.m_sector_assignment, 15);
+//    g_state.m_name = preferences.getString("m_name", "DreamStream");
+//    g_state.m_group_name = preferences.getString("m_group_name", "unassigned");
+
     memset(g_read_buffer, 0, sizeof(g_read_buffer));
     memset(g_write_buffer, 0, sizeof(g_write_buffer));
 
@@ -302,10 +364,46 @@ void setup()
             delay(500);
         }
 
-        MDNS.begin("DreamStream");
+        MDNS.begin(HOSTNAME);
     }
 
     Serial.println("Connected to wifi");
+
+    ArduinoOTA.setHostname(HOSTNAME);
+
+    ArduinoOTA
+      .onStart([]() {
+        updating = true;
+        g_udp.stop();
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH)
+          type = "sketch";
+        else // U_SPIFFS
+          type = "filesystem";
+
+        // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+        Serial.println("Start updating " + type);
+      })
+      .onEnd([]() {
+        updating = false;
+        Serial.println("\nEnd");
+        ESP.restart();
+      })
+      .onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+      })
+      .onError([](ota_error_t error) {
+        updating = false;
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+        ESP.restart();
+      });
+
+    ArduinoOTA.begin();
 
     /*
      * Setup UDP
@@ -318,14 +416,124 @@ void setup()
      * Setup FastLED
      */
     #ifdef USING_FASTLED
-    {
-        FastLED.addLeds<FASTLED_LED_TYPE, FASTLED_PIN_ID, FASTLED_LED_COLOR_ORDER>(g_fastled_leds, FASTLED_NUM_LEDS).setCorrection(TypicalLEDStrip);
-        FastLED.setBrightness(g_state.m_brightness);
-    }
+    FastLED.addLeds<FASTLED_LED_TYPE, FASTLED_PIN_ID, FASTLED_LED_COLOR_ORDER>(g_fastled_leds, FASTLED_NUM_LEDS).setCorrection(TypicalLEDStrip);
+    #if FASTLED_NUM_LEDS > 50
+    FastLED.setDither(0);
+    #endif
     #endif // USING_FASTLED
 
-    Serial.println("Entering main loop");
+    // timer = timerBegin(0, 80, true);
+    // timerAttachInterrupt(timer, &periodicUpdate, true);
+    // timerAlarmWrite(timer, UPDATE_INTERVAL * 1000, false);
+    // timerAlarmEnable(timer);
 
+    Serial.println("Entering main loop");
+}
+
+void calculateColor(){
+  if (g_state.m_mode == DEVICE_MODE::Video){
+      // WIP
+
+//        // horizontal
+//        fillPaletteFromSectorData(sectorPalette_TR_TL, data->m_sectors, sectorIndices_TR_TL, 50);
+//        //fillPaletteFromSectorData(sectorPalette_BL_BR, data->m_sectors, sectorIndices_BL_BR, 5);
+//
+//        // vertical
+//        fillPaletteFromSectorData(sectorPalette_BR_TR, data->m_sectors, sectorIndices_BR_TR, 25);
+//        fillPaletteFromSectorData(sectorPalette_TL_BL, data->m_sectors, sectorIndices_TL_BL, 25);
+
+       // CRGBPalette16 finalPalette;
+      // finalPalette.loadDynamicGradientPalette(sectorPalette_BL_BR);
+
+      /* Sectors
+         6  5  4  3   2
+         7            1
+         8  9  10 12  0
+      */
+
+      CRGB* leds = fastledGetLeds();
+
+      #ifdef ENABLE_GRADIENT
+
+      fill_gradient(
+          leds,
+          25,
+          sectors[7],
+          sectors[8],
+          sectors[9]);
+
+      fill_gradient(
+          leds + 25,
+          25,
+          sectors[7],
+          sectors[6],
+          sectors[5]);
+
+      fill_gradient(
+          leds + 50,
+          25,
+          sectors[5],
+          sectors[4],
+          sectors[3]);
+
+      fill_gradient(
+          leds + 75,
+          25,
+          sectors[3],
+          sectors[2],
+          sectors[1]);
+
+      #else
+
+      int index = 0;
+      fill_solid(leds + index, 8, sectors[8]);
+      index += 8;
+      fill_solid(leds + index, 9, sectors[7]);
+      index += 9;
+      fill_solid(leds + index, 18, sectors[6]);
+      index += 18;
+
+      fill_solid(leds + index, 10, sectors[5]);
+      index += 10;
+      fill_solid(leds + index, 10, sectors[4]);
+      index += 10;
+      fill_solid(leds + index, 10, sectors[3]);
+      index += 10;
+      fill_solid(leds + index, 18, sectors[2]);
+      index += 18;
+
+      fill_solid(leds + index, 9, sectors[1]);
+      index += 9;
+      fill_solid(leds + index, 8, sectors[0]);
+
+      #endif
+
+//        for (int i = 0; i < 12; ++i)
+//        {
+//            fastledGetLeds()[i] = CRGB(data->m_sectors[i].rgb[0], data->m_sectors[i].rgb[1], data->m_sectors[i].rgb[2]);
+//        }
+  }
+}
+
+void update(){
+      #ifdef USING_FASTLED
+      #ifdef FASTLED_ENABLE_SMOOTHING
+
+      EVERY_N_MILLISECONDS(1000/120)
+      {
+          for (int i = 0; i < FASTLED_NUM_LEDS; ++i)
+          {
+              g_fastled_leds[i] = blend(g_fastled_leds[i], g_fastled_targetleds[i], FASTLED_SMOOTHING);
+          }
+      }
+      #endif // FASTLED_ENABLE_SMOOTHING
+
+      FastLED.show();
+      #endif // USING_FASTLED
+      ArduinoOTA.handle();
+}
+
+void loop() {
     /*
      * Main Loop
      */
@@ -335,45 +543,24 @@ void setup()
     const PacketHeader* pktHdr = (const PacketHeader*)(g_read_buffer);
     const uint8_t*      pktPayload = (const uint8_t*)(g_read_buffer + sizeof(PacketHeader));
     int32_t             pktPayloadLen = 0;
-    
-    while (true)
+
+    sktAvailable = g_udp.parsePacket();
+    if (sktAvailable > 0)
     {
-        sktAvailable = g_udp.parsePacket();
+        pktSender = g_udp.remoteIP();
+        pktLen = g_udp.read(g_read_buffer, sizeof(g_read_buffer));
 
-        if (sktAvailable > 0)
+        if (pktLen > sizeof(PacketHeader))
         {
-            pktSender = g_udp.remoteIP();
-            pktLen = g_udp.read(g_read_buffer, sizeof(g_read_buffer));
-
-            if (pktLen > sizeof(PacketHeader))
+            if (pktHdr->m_magic == DS_MAGIC)
             {
-                if (pktHdr->m_magic == DS_MAGIC)
-                {
-                    // good enough, maybe check CRC if we really want to?
-                    pktPayloadLen = pktHdr->m_length - 5;
-                    handleIncomingPacket(pktSender, pktHdr->m_flags, pktHdr->m_cmd_upper, pktHdr->m_cmd_lower, pktPayload, pktPayloadLen);
-                }
+                // good enough, maybe check CRC if we really want to?
+                pktPayloadLen = pktHdr->m_length - 5;
+                handleIncomingPacket(pktSender, pktHdr->m_flags, pktHdr->m_cmd_upper, pktHdr->m_cmd_lower, pktPayload, pktPayloadLen);
             }
         }
-
-        #ifdef FASTLED_ENABLE_SMOOTHING
-        EVERY_N_MILLISECONDS(1000/120)
-        {
-            for (int i = 0; i < FASTLED_NUM_LEDS; ++i)
-            {
-                g_fastled_leds[i] = blend(g_fastled_leds[i], g_fastled_targetleds[i], FASTLED_SMOOTHING);
-            }
-        }
-        #endif // FASTLED_ENABLE_SMOOTHING
-
-        #ifdef USING_FASTLED
-        FastLED.show(); 
-        #endif // USING_FASTLED
     }
 }
-
-void loop() { }
-
 
 ///////////////////////////////////////////////////////////////////////////////
 /// FUNCTIONS
@@ -388,9 +575,15 @@ void handleIncomingPacket(const IPAddress& ip, uint8_t flag, uint8_t cmdUpper, u
     switch (cmd)
     {
         case COMMANDS_IDS::ResetESP: break;
-        case COMMANDS_IDS::Name:                        g_state.m_name = (const char*)pld; break;
-        case COMMANDS_IDS::GroupName:                   g_state.m_group_name = (const char*)pld; break;
-        case COMMANDS_IDS::GroupNumber:                 g_state.m_mode = pld[0]; break;
+        case COMMANDS_IDS::Name:
+            setName(pld);
+            break;
+        case COMMANDS_IDS::GroupName:
+            setGroupName(pld);
+            break;
+        case COMMANDS_IDS::GroupNumber:
+            setMode(pld);
+            break;
         case COMMANDS_IDS::CurrentState:                handleRequestCurrentState(ip); break;
         case COMMANDS_IDS::Ping:                        sendPacket(ip, PKT_RESPONSE, COMMANDS::Ping, 0); break;
         case COMMANDS_IDS::SubscribeToSectorData:       payloadWriteBuffer()[0] = 1; sendPacket(ip, PKT_RESPONSE_REQUEST, COMMANDS::SubscribeToSectorData, 1); break;
@@ -442,6 +635,21 @@ void handleIncomingPacket(const IPAddress& ip, uint8_t flag, uint8_t cmdUpper, u
     }
 }
 
+void setMode(const uint8_t *pld) {
+    g_state.m_mode = pld[0];
+    preferences.putUChar("m_mode", g_state.m_mode);
+}
+
+void setGroupName(const uint8_t *pld) {
+    g_state.m_group_name = (const char*)pld;
+    preferences.putString("m_group_name", g_state.m_group_name);
+}
+
+void setName(const uint8_t *pld) {
+    g_state.m_name = (const char*)pld;
+    preferences.putString("m_name", g_state.m_name);
+}
+
 void handleRequestCurrentState(const IPAddress& ip)
 {
     uint8_t* buff = payloadWriteBuffer();
@@ -470,6 +678,7 @@ void handleWriteAmbientColor()
     for (int i = 0; i < FASTLED_NUM_LEDS; ++i)
         fastledGetLeds()[i] = CRGB(g_state.m_ambient_color[0], g_state.m_ambient_color[1], g_state.m_ambient_color[2]);
 
+    preferences.putBytes("m_ambient_color", g_state.m_ambient_color, 3);
     g_show_leds = true;
 
     #endif // USING_FASTLED
@@ -479,64 +688,78 @@ void handleWriteBrightness()
 {
     #ifdef USING_FASTLED
 
-    FastLED.setBrightness(g_state.m_brightness);
+    preferences.putUChar("m_brightness", g_state.m_brightness);
+    FastLED.setBrightness(map(g_state.m_brightness, 0, 100, 0, 255));
 
     #endif // USING_FASTLED
 }
 
-TDynamicRGBGradientPalette_byte sectorPalette_BR_TR[4 * 3];
-TDynamicRGBGradientPalette_byte sectorPalette_TR_TL[4 * 5];
-TDynamicRGBGradientPalette_byte sectorPalette_TL_BL[4 * 3];
-TDynamicRGBGradientPalette_byte sectorPalette_BL_BR[4 * 5];
-
-const uint8_t sectorIndices_BR_TR[] PROGMEM = { 0, 1, 2 }; 
-const uint8_t sectorIndices_TR_TL[] PROGMEM = { 2, 3, 4, 5, 6 }; 
-const uint8_t sectorIndices_TL_BL[] PROGMEM = { 6, 7, 8 }; 
-const uint8_t sectorIndices_BL_BR[] PROGMEM = { 8, 9, 10, 11, 0 }; 
-
-void fillPaletteFromSectorData(TDynamicRGBGradientPalette_byte* target, const SectorRGB* data, const uint8_t* indices, uint8_t numSteps)
-{
-    uint8_t indexDelta = 255 / (numSteps - 1);
-    int counter = 0;
-
-    for (uint8_t i = 0; i < numSteps; ++i)
-    {
-        target[4 * i] = (i == (numSteps - 1)) ? 255 : indexDelta * i;
-        
-        for (uint8_t y = 0; y < 3; ++y)
-            target[4 * i + 1 + y] = data[indices[i]].rgb[y];
-    }
-}
+//TDynamicRGBGradientPalette_byte sectorPalette_BR_TR[25 * 3];
+//TDynamicRGBGradientPalette_byte sectorPalette_TR_TL[50 * 5];
+//TDynamicRGBGradientPalette_byte sectorPalette_TL_BL[25 * 3];
+//TDynamicRGBGradientPalette_byte sectorPalette_BL_BR[0 * 5];
+//
+//const uint8_t sectorIndices_BR_TR[] PROGMEM = { 0, 1, 2 };
+//const uint8_t sectorIndices_TR_TL[] PROGMEM = { 2, 3, 4, 5, 6 };
+//const uint8_t sectorIndices_TL_BL[] PROGMEM = { 6, 7, 8 };
+//const uint8_t sectorIndices_BL_BR[] PROGMEM = { 8, 9, 10, 11, 0 };
+//
+//void fillPaletteFromSectorData(TDynamicRGBGradientPalette_byte* target, const SectorRGB* data, const uint8_t* indices, uint8_t numSteps)
+//{
+//    uint8_t indexDelta = 255 / (numSteps - 1);
+//    int counter = 0;
+//
+//    for (uint8_t i = 0; i < numSteps; ++i)
+//    {
+//        target[4 * i] = (i == (numSteps - 1)) ? 255 : indexDelta * i;
+//
+//        for (uint8_t y = 0; y < 3; ++y)
+//            target[4 * i + 1 + y] = data[indices[i]].rgb[y];
+//    }
+//}
 
 void handleWriteSectorData(const PacketSectorData* data)
 {
+
+  // static int update_counter = 0;
+  // static float last_update = 0;
+  // static float slowest = 0;
+  // update_counter++;
+  //
+  // float seconds = millis() / 1000.0;
+  // slowest = max(slowest, seconds - last_update);
+  // last_update = seconds;
+  //
+  // if(update_counter % 10 == 0){
+  //   Serial.printf("updating colors: %d :: %.3f :: %.3f\n", update_counter, slowest, last_update);
+  //   slowest = 0;
+  // }
+
     #ifdef USING_FASTLED
+    #ifdef ENABLE_GRADIENT
 
-    if (g_state.m_mode == DEVICE_MODE::Video)
-    {
-        // WIP
-        
-        // horizontal
-        //fillPaletteFromSectorData(sectorPalette_TR_TL, data->m_sectors, sectorIndices_TR_TL, 5);
-        //fillPaletteFromSectorData(sectorPalette_BL_BR, data->m_sectors, sectorIndices_BL_BR, 5);
+    for(int i=0; i<12; i++){
+        sectors[i] = rgb2hsv_approximate(CRGB(
+            data->m_sectors[i].rgb[0],
+            data->m_sectors[i].rgb[1],
+            data->m_sectors[i].rgb[2]));
+    };
 
-        // vertical
-        //fillPaletteFromSectorData(sectorPalette_BR_TR, data->m_sectors, sectorIndices_BR_TR, 3);
-        //fillPaletteFromSectorData(sectorPalette_TL_BL, data->m_sectors, sectorIndices_TL_BL, 3);
-        
-         // CRGBPalette16 finalPalette;
-        // finalPalette.loadDynamicGradientPalette(sectorPalette_BL_BR);
+    #else
 
-        for (int i = 0; i < 12; ++i)
-        {
-            fastledGetLeds()[i] = CRGB(data->m_sectors[i].rgb[0], data->m_sectors[i].rgb[1], data->m_sectors[i].rgb[2]);
-        }
-    }
+    for(int i=0; i<12; i++){
+        sectors[i] = CRGB(
+            data->m_sectors[i].rgb[0],
+            data->m_sectors[i].rgb[1],
+            data->m_sectors[i].rgb[2]);
+    };
 
 
+    #endif
+
+    calculateColor();
     #endif // USING_FASTLED
 }
-
 
 void handleWriteMode()
 {
